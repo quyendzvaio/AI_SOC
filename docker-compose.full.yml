@@ -1,0 +1,50 @@
+services:
+  api:
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SECURITY_EVENTS_TOPIC: security_events
+    depends_on:
+      kafka:
+        condition: service_started
+
+  enrichment-worker:
+    build:
+      context: ./services/enrichment-worker
+    image: ai-soc-enrichment-worker:local
+    environment:
+      API_BASE_URL: http://api:8000
+      INTERNAL_TOKEN: local-internal-token
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SECURITY_EVENTS_TOPIC: security_events
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      ENABLE_LLM: ${ENABLE_LLM:-false}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
+    depends_on:
+      api:
+        condition: service_started
+      kafka:
+        condition: service_started
+
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+volumes:
+  qdrant_data:

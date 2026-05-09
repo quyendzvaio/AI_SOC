@@ -1,0 +1,83 @@
+services:
+  api:
+    build:
+      context: ./backend
+    image: ai-soc-api:local
+    environment:
+      DATABASE_URL: postgresql+asyncpg://aisoc:aisoc@postgres:5432/aisoc
+      JWT_SECRET: change-this-secret-before-prod
+      INGEST_TOKEN: local-ingest-token
+      INTERNAL_TOKEN: local-internal-token
+      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000"]'
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    image: ai-soc-frontend:local
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aisoc
+      POSTGRES_USER: aisoc
+      POSTGRES_PASSWORD: aisoc
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aisoc -d aisoc"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  collector-agent:
+    build:
+      context: ./services/collector-agent
+    image: ai-soc-collector-agent:local
+    profiles: ["agent"]
+    environment:
+      API_BASE_URL: http://api:8000
+      INGEST_TOKEN: local-ingest-token
+      ENABLE_JOURNALCTL: "true"
+      LOG_PATHS: /host/var/log/auth.log,/host/var/log/syslog
+    volumes:
+      - /var/log:/host/var/log:ro
+      - /run/log/journal:/run/log/journal:ro
+    depends_on:
+      - api
+
+  email-ingest:
+    build:
+      context: ./services/email-ingest
+    image: ai-soc-email-ingest:local
+    profiles: ["integrations"]
+    environment:
+      API_BASE_URL: http://api:8000
+      INGEST_TOKEN: local-ingest-token
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_USER: ${IMAP_USER:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
+    ports:
+      - "8010:8010"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

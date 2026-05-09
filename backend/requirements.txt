@@ -1,0 +1,14 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+uvloop==0.22.1
+httptools==0.7.1
+SQLAlchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+pydantic-settings==2.7.1
+email-validator==2.2.0
+PyJWT==2.10.1
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1
+python-multipart==0.0.20
+orjson==3.10.13
+aiokafka==0.12.0
