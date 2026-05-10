@@ -18,6 +18,8 @@ class OtpPurpose(str, enum.Enum):
     register = "register"
     login = "login"
     reset_password = "reset_password"
+    verify_notification_email = "verify_notification_email"
+    verify_monitored_email = "verify_monitored_email"
 
 
 class CollectorOS(str, enum.Enum):
@@ -64,8 +66,13 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    firebase_uid: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
+    auth_provider: Mapped[str] = mapped_column(String(32), default="local")
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.soc_analyst)
     is_email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    notification_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_notification_email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    device_log_consent_granted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     failed_login_count: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -189,6 +196,29 @@ class IntelSource(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     config_encrypted: Mapped[dict] = mapped_column(JSONB, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class RuntimeSetting(Base):
+    __tablename__ = "runtime_settings"
+
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    value_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    value_public: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_secret: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class MonitoredEmail(Base):
+    __tablename__ = "monitored_emails"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    provider: Mapped[str] = mapped_column(String(64), default="smtp_auth")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Notification(Base):

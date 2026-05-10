@@ -1,64 +1,43 @@
 # AI-SOC MVP
 
-Backend MVP for realtime Windows/Ubuntu collector ingest, email/webhook ingest, summarized logs, alerts, OTP auth, and queued email notifications.
+MVP cho realtime ingest log/email, xác thực người dùng bằng OTP qua SMTP Gmail, theo dõi mailbox, và alert trên dashboard.
 
-## Run locally
-
-```bash
-docker compose up --build api postgres redis
-```
-
-API health:
+## Biến môi trường chính
 
 ```bash
-curl http://localhost:8000/healthz
+DATABASE_URL=postgresql+asyncpg://aisoc:aisoc@postgres:5432/aisoc
+JWT_SECRET=change-this-secret-before-prod
+INGEST_TOKEN=local-ingest-token
+INTERNAL_TOKEN=local-internal-token
+CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000","http://127.0.0.1:8000"]
+
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_USERNAME=ninhvanquyen2020@gmail.com
+SMTP_PASSWORD=your-gmail-app-password
+SMTP_FROM=ninhvanquyen2020@gmail.com
 ```
 
-Register returns a `DEV_OTP` token in local mode so the OTP flow can be tested before wiring a mail provider.
-
-## Realtime dashboard
+## Chạy local
 
 ```bash
-docker compose up --build frontend api postgres
+cd frontend
+npm install
+npm run build
+cd ..
+docker compose up --build api frontend postgres redis
 ```
 
-Open `http://localhost:3000`. The dashboard subscribes to `GET /stream/events` and shows log/email events as they arrive.
+Mở `http://localhost:3000`.
 
-Send a test event:
+## Luồng xác thực
 
-```bash
-curl -X POST http://localhost:8000/ingest/webhook \
-  -H 'Content-Type: application/json' \
-  -H 'x-ingest-token: local-ingest-token' \
-  -d '{"source_type":"email","source":"demo-mailbox","content":"phishing email from attacker@example.com with suspicious domain evil.example and failed login from 8.8.8.8"}'
-```
+1. Đăng ký: nhập email + password, hệ thống gửi OTP qua SMTP.
+2. Đăng nhập: nhập email + password, hệ thống gửi OTP đăng nhập qua SMTP.
+3. Xác thực email theo dõi: nhập email theo dõi trong `Settings`, hệ thống gửi OTP qua SMTP.
 
-## Collector agent
+## Realtime mail/log + alert
 
-Ubuntu collector container:
-
-```bash
-docker compose --profile agent up --build collector-agent
-```
-
-On Windows, run `services/collector-agent/agent.py` directly with Python; it uses `wevtutil` to poll Windows Event Logs.
-
-## Email ingest
-
-IMAP polling and Microsoft Graph webhook receiver:
-
-```bash
-docker compose --profile integrations up --build email-ingest
-```
-
-Graph webhook endpoint: `POST http://localhost:8010/graph/webhook`.
-
-## Full async enrichment stack
-
-Kafka, Qdrant, and the enrichment worker are split into `docker-compose.full.yml` so the default boot stays light:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.full.yml up --build
-```
-
-The API image is intentionally slim: `python:3.12-slim`, no dev dependencies, precompiled bytecode, no reload server, and no LLM/Threat Intel calls in the hot ingest path. Kafka publishing is optional and only starts when `KAFKA_BOOTSTRAP_SERVERS` is set.
+- Khi email ingest vào hệ thống, dashboard hiển thị realtime trong `Logs & Email`.
+- `Dashboard` có panel `Mail theo dõi đã nhận` (lọc theo email theo dõi đã xác thực).
+- Nếu phát hiện dấu hiệu nghi vấn, hệ thống tạo alert và hiển thị trên dashboard.

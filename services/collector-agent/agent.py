@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import json
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import time
@@ -78,6 +80,9 @@ async def tail_file(path: Path) -> AsyncIterator[dict[str, Any]]:
 async def journalctl_events() -> AsyncIterator[dict[str, Any]]:
     if platform.system().lower() == "windows" or not ENABLE_JOURNALCTL:
         return
+    if shutil.which("journalctl") is None:
+        print("journalctl not found; skip journal stream and continue with file tails", flush=True)
+        return
     process = await asyncio.create_subprocess_exec(
         "journalctl",
         "-f",
@@ -128,7 +133,7 @@ async def windows_events() -> AsyncIterator[dict[str, Any]]:
                 content = block.strip()
                 if not content:
                     continue
-                key = str(hash(content))
+                key = hashlib.sha256(content.encode("utf-8", errors="replace")).hexdigest()
                 if key in seen:
                     continue
                 seen.add(key)

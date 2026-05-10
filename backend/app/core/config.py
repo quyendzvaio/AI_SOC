@@ -18,7 +18,18 @@ class Settings(BaseSettings):
     internal_token: str = Field(default="local-internal-token", min_length=8)
     kafka_bootstrap_servers: str | None = None
     kafka_security_events_topic: str = "security_events"
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = "ninhvanquyen2020@gmail.com"
+    config_encryption_key: str | None = None
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ]
     enable_sql_echo: bool = False
 
 

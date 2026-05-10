@@ -153,5 +153,18 @@ async def ingest_event(
 
 
 async def first_admin_email(session: AsyncSession) -> str | None:
-    result = await session.execute(select(User.email).where(User.is_email_verified.is_(True)).limit(1))
+    from sqlalchemy import case
+    result = await session.execute(
+        select(
+            case(
+                (
+                    (User.notification_email.isnot(None)) & (User.is_notification_email_verified.is_(True)),
+                    User.notification_email,
+                ),
+                else_=User.email,
+            )
+        )
+        .where(User.is_email_verified.is_(True))
+        .limit(1)
+    )
     return result.scalar_one_or_none()

@@ -16,6 +16,8 @@ class UserOut(ApiModel):
     email: EmailStr
     role: str
     is_email_verified: bool
+    notification_email: str | None = None
+    is_notification_email_verified: bool = False
 
 
 class RegisterIn(ApiModel):
@@ -139,6 +141,68 @@ class AssistantQueryIn(ApiModel):
 
 class AssistantQueryOut(ApiModel):
     answer: str
+
+
+class UserSettingsIn(ApiModel):
+    notification_email: EmailStr
+
+
+class VerifyNotificationEmailIn(ApiModel):
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class NotificationEmailOut(ApiModel):
+    notification_email: str | None = None
+    is_notification_email_verified: bool = False
+    otp_required: bool = False
+    dev_otp: str | None = None
+    message: str | None = None
+
+
+class DeviceConsentIn(ApiModel):
+    granted: bool
+
+
+class DeviceConsentOut(ApiModel):
+    granted: bool
+    granted_at: datetime | None = None
+
+
+class RuntimeConfigIn(ApiModel):
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    abuseipdb_api_key: str | None = None
+    virustotal_api_key: str | None = None
+    nvd_api_key: str | None = None
+
+
+class RuntimeConfigOut(ApiModel):
+    llm_base_url: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    abuseipdb_api_key: str | None = None
+    virustotal_api_key: str | None = None
+    nvd_api_key: str | None = None
+
+
+class MonitoredEmailIn(ApiModel):
+    email: EmailStr
+
+
+class VerifyMonitoredEmailIn(ApiModel):
+    email: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+
+class MonitoredEmailOut(ApiModel):
+    id: uuid.UUID | None = None
+    email: str | None = None
+    is_verified: bool = False
+    provider: str = "smtp_auth"
+    otp_required: bool = False
+    dev_otp: str | None = None
+    message: str | None = None
 
 
 class NotificationOut(ApiModel):

@@ -22,6 +22,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 async def create_all() -> None:
     import app.models  # noqa: F401
+    from app.services.schema_migrations import run_bootstrap_migrations
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await run_bootstrap_migrations(conn)

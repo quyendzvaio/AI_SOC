@@ -4,8 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import verify_internal_token
-from app.models import Alert, LogEvent, Notification, Severity
+from app.models import Alert, LogEvent, Notification, RuntimeSetting, Severity
 from app.schemas import AlertOut, EnrichmentIn
+from app.services.crypto import decrypt_value
 from app.services.realtime import broker
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verify_internal_token)])
@@ -68,3 +69,12 @@ def severity_rank(severity: Severity) -> int:
         Severity.High: 3,
         Severity.Critical: 4,
     }[severity]
+
+
+@router.get("/runtime-config")
+async def internal_runtime_config(session: AsyncSession = Depends(get_session)) -> dict[str, str | None]:
+    result = await session.execute(select(RuntimeSetting))
+    config: dict[str, str | None] = {}
+    for setting in result.scalars():
+        config[setting.key] = decrypt_value(setting.value_encrypted) if setting.is_secret else setting.value_public
+    return config

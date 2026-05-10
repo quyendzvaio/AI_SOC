@@ -24,17 +24,27 @@ LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
 ENABLE_LLM = os.getenv("ENABLE_LLM", "false").lower() == "true"
 
 
+async def fetch_runtime_config(client: httpx.AsyncClient) -> dict[str, str]:
+    try:
+        response = await client.get("/internal/runtime-config")
+        response.raise_for_status()
+        return {key: value for key, value in response.json().items() if value}
+    except Exception as exc:
+        print(f"runtime config fetch failed, using env: {exc}", flush=True)
+        return {}
+
+
 def loads(raw: bytes) -> dict[str, Any]:
     return orjson.loads(raw)
 
 
-async def abuseipdb(client: httpx.AsyncClient, ip: str) -> dict[str, Any] | None:
-    if not ABUSEIPDB_API_KEY:
+async def abuseipdb(client: httpx.AsyncClient, ip: str, api_key: str) -> dict[str, Any] | None:
+    if not api_key:
         return None
     response = await client.get(
         "https://api.abuseipdb.com/api/v2/check",
         params={"ipAddress": ip, "maxAgeInDays": 90},
-        headers={"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"},
+        headers={"Key": api_key, "Accept": "application/json"},
     )
     if response.status_code >= 400:
         return {"ip": ip, "error": response.text[:200]}
@@ -48,12 +58,12 @@ async def abuseipdb(client: httpx.AsyncClient, ip: str) -> dict[str, Any] | None
     }
 
 
-async def virustotal_domain(client: httpx.AsyncClient, domain: str) -> dict[str, Any] | None:
-    if not VIRUSTOTAL_API_KEY:
+async def virustotal_domain(client: httpx.AsyncClient, domain: str, api_key: str) -> dict[str, Any] | None:
+    if not api_key:
         return None
     response = await client.get(
         f"https://www.virustotal.com/api/v3/domains/{domain}",
-        headers={"x-apikey": VIRUSTOTAL_API_KEY},
+        headers={"x-apikey": api_key},
     )
     if response.status_code >= 400:
         return {"domain": domain, "error": response.text[:200]}
@@ -61,10 +71,10 @@ async def virustotal_domain(client: httpx.AsyncClient, domain: str) -> dict[str,
     return {"domain": domain, "last_analysis_stats": stats}
 
 
-async def nvd_search(client: httpx.AsyncClient, keyword: str) -> dict[str, Any] | None:
-    if not (NVD_API_KEY and keyword):
+async def nvd_search(client: httpx.AsyncClient, keyword: str, api_key: str) -> dict[str, Any] | None:
+    if not (api_key and keyword):
         return None
-    headers = {"apiKey": NVD_API_KEY} if NVD_API_KEY else {}
+    headers = {"apiKey": api_key}
     response = await client.get(
         "https://services.nvd.nist.gov/rest/json/cves/2.0",
         params={"keywordSearch": keyword[:120], "resultsPerPage": 3},
@@ -85,8 +95,11 @@ async def nvd_search(client: httpx.AsyncClient, keyword: str) -> dict[str, Any] 
     }
 
 
-async def llm_summary(client: httpx.AsyncClient, event: dict[str, Any], enrichment: dict[str, Any]) -> str | None:
-    if not (ENABLE_LLM and LLM_API_KEY):
+async def llm_summary(client: httpx.AsyncClient, event: dict[str, Any], enrichment: dict[str, Any], config: dict[str, str]) -> str | None:
+    api_key = config.get("llm_api_key") or LLM_API_KEY
+    base_url = (config.get("llm_base_url") or LLM_BASE_URL).rstrip("/")
+    model = config.get("llm_model") or LLM_MODEL
+    if not (ENABLE_LLM and api_key):
         return None
     prompt = (
         "You are a SOC analyst. Summarize this event in 3 concise sentences, "
@@ -96,10 +109,10 @@ async def llm_summary(client: httpx.AsyncClient, event: dict[str, Any], enrichme
         f"Threat intel: {enrichment}"
     )
     response = await client.post(
-        f"{LLM_BASE_URL}/chat/completions",
-        headers={"Authorization": f"Bearer {LLM_API_KEY}"},
+        f"{base_url}/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
         json={
-            "model": LLM_MODEL,
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
             "max_tokens": 220,
@@ -128,6 +141,7 @@ def choose_severity(event: dict[str, Any], enrichment: dict[str, Any]) -> str | 
 
 
 async def enrich_event(client: httpx.AsyncClient, event: dict[str, Any]) -> dict[str, Any]:
+    config = await fetch_runtime_config(client)
     entities = event.get("extracted_entities") or {}
     ips = entities.get("ips") or []
     domains = entities.get("domains") or []
@@ -135,11 +149,11 @@ async def enrich_event(client: httpx.AsyncClient, event: dict[str, Any]) -> dict
 
     tasks = []
     for ip in ips[:5]:
-        tasks.append(abuseipdb(client, ip))
+        tasks.append(abuseipdb(client, ip, config.get("abuseipdb_api_key") or ABUSEIPDB_API_KEY))
     for domain in domains[:5]:
-        tasks.append(virustotal_domain(client, domain))
+        tasks.append(virustotal_domain(client, domain, config.get("virustotal_api_key") or VIRUSTOTAL_API_KEY))
     if event.get("source"):
-        tasks.append(nvd_search(client, event["source"]))
+        tasks.append(nvd_search(client, event["source"], config.get("nvd_api_key") or NVD_API_KEY))
 
     results = [item for item in await asyncio.gather(*tasks, return_exceptions=False) if item]
     for item in results:
@@ -150,7 +164,7 @@ async def enrich_event(client: httpx.AsyncClient, event: dict[str, Any]) -> dict
         elif "cves" in item:
             enrichment["nvd"] = item
 
-    ai_summary = await llm_summary(client, event, enrichment)
+    ai_summary = await llm_summary(client, event, enrichment, config)
     return {"enrichment": enrichment, "ai_summary": ai_summary}
 
 

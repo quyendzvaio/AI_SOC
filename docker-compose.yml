@@ -8,7 +8,13 @@ services:
       JWT_SECRET: change-this-secret-before-prod
       INGEST_TOKEN: local-ingest-token
       INTERNAL_TOKEN: local-internal-token
-      CORS_ORIGINS: '["http://localhost:3000","http://localhost:8000"]'
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-465}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-ninhvanquyen2020@gmail.com}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+      CORS_ORIGINS: '["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000","http://127.0.0.1:8000"]'
     ports:
       - "8000:8000"
     depends_on:
