@@ -31,6 +31,7 @@ from app.schemas import (
 )
 from app.services.crypto import decrypt_value, encrypt_value, mask_secret
 from app.services.smtp_mail import send_smtp_email
+from app.services.assistant_live import answer_question
 
 router = APIRouter(dependencies=[Depends(current_user)])
 
@@ -114,10 +115,10 @@ async def assistant_query(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AssistantQueryOut:
-    answer = (
-        "MVP assistant is running in lightweight mode. "
-        "Use alerts/log summaries and configured Threat Intel for deeper enrichment."
-    )
+    try:
+        answer = await answer_question(session, payload.question)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI assistant failed: {str(exc)}") from exc
     session.add(AiQuery(user_id=user.id, question=payload.question, response=answer))
     await session.commit()
     return AssistantQueryOut(answer=answer)

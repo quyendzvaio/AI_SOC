@@ -78,6 +78,9 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!token) return;
+    void ensureAuthorized(() => getMe(token)).then((me) => {
+      if (me) setCurrentUser(me);
+    });
     void loadSnapshot(token);
     setConnection("connecting");
     const events = new EventSource(streamUrl(token));
@@ -94,23 +97,31 @@ export function Dashboard() {
       const payload = JSON.parse((message as MessageEvent).data) as LiveEvent;
       if (payload.alert) setAlerts((items) => [payload.alert!, ...items.filter((item) => item.id !== payload.alert!.id)].slice(0, 120));
     });
-    events.onerror = () => setConnection("connecting");
+    events.onerror = () => {
+      setConnection("connecting");
+      void ensureAuthorized(() => authed("/me", token));
+    };
     return () => events.close();
   }, [token]);
 
   async function loadSnapshot(authToken: string) {
-    const [nextLogs, nextAlerts, nextNotifications, nextIncidents, nextMonitoredFeed] = await Promise.all([
-      authed<LogItem[]>("/logs?limit=80", authToken),
-      authed<AlertItem[]>("/alerts?limit=50", authToken),
-      authed<NotificationItem[]>("/notifications?limit=50", authToken),
-      getIncidents(authToken),
-      getMonitoredEmailFeed(authToken, 100),
-    ]);
-    setLogs(nextLogs);
-    setAlerts(nextAlerts);
-    setNotifications(nextNotifications);
-    setIncidents(nextIncidents);
-    setMonitoredFeed(nextMonitoredFeed);
+    try {
+      const [nextLogs, nextAlerts, nextNotifications, nextIncidents, nextMonitoredFeed] = await Promise.all([
+        authed<LogItem[]>("/logs?limit=80", authToken),
+        authed<AlertItem[]>("/alerts?limit=50", authToken),
+        authed<NotificationItem[]>("/notifications?limit=50", authToken),
+        getIncidents(authToken),
+        getMonitoredEmailFeed(authToken, 100),
+      ]);
+      setLogs(nextLogs);
+      setAlerts(nextAlerts);
+      setNotifications(nextNotifications);
+      setIncidents(nextIncidents);
+      setMonitoredFeed(nextMonitoredFeed);
+    } catch (error) {
+      handleUnauthorized(error);
+      return;
+    }
     try {
       const user = await getMe(authToken);
       setCurrentUser(user);
@@ -183,8 +194,10 @@ export function Dashboard() {
 
   async function grantDeviceConsent(granted: boolean) {
     if (!token) return;
-    const result = await updateDeviceConsent(token, granted);
-    setDeviceConsent(result.granted);
+    await ensureAuthorized(async () => {
+      const result = await updateDeviceConsent(token, granted);
+      setDeviceConsent(result.granted);
+    });
   }
 
   async function sendChat() {
@@ -227,7 +240,8 @@ export function Dashboard() {
     if (!token) return;
     setSettingsLoading(true);
     try {
-      const result = await requestNotificationEmail(token, notifEmail);
+      const result = await ensureAuthorized(() => requestNotificationEmail(token, notifEmail));
+      if (!result) return;
       setSettingsMessage(result.message || "Đã gửi email xác nhận.");
       if (result.dev_otp) setNotifOtp(result.dev_otp);
     } catch (error) {
@@ -240,9 +254,11 @@ export function Dashboard() {
     if (!token) return;
     setSettingsLoading(true);
     try {
-      const result = await verifyNotificationEmail(token, notifOtp);
+      const result = await ensureAuthorized(() => verifyNotificationEmail(token, notifOtp));
+      if (!result) return;
       setSettingsMessage(result.message || "Email thông báo đã xác nhận.");
-      setCurrentUser(await getMe(token));
+      const me = await ensureAuthorized(() => getMe(token));
+      if (me) setCurrentUser(me);
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
@@ -253,10 +269,12 @@ export function Dashboard() {
     if (!token) return;
     setSettingsLoading(true);
     try {
-      const result = await requestMonitoredEmail(token, monitoredEmail);
+      const result = await ensureAuthorized(() => requestMonitoredEmail(token, monitoredEmail));
+      if (!result) return;
       setSettingsMessage(result.message || "Đã gửi email xác nhận quyền theo dõi.");
       if (result.dev_otp) setMonitoredOtp(result.dev_otp);
-      setMonitoredEmails(await listMonitoredEmails(token));
+      const next = await ensureAuthorized(() => listMonitoredEmails(token));
+      if (next) setMonitoredEmails(next);
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
@@ -271,10 +289,15 @@ export function Dashboard() {
     }
     setSettingsLoading(true);
     try {
-      const result = await verifyMonitoredEmail(token, monitoredEmail, monitoredOtp);
+      const result = await ensureAuthorized(() => verifyMonitoredEmail(token, monitoredEmail, monitoredOtp));
+      if (!result) return;
       setSettingsMessage(result.message || "Email theo dõi đã xác nhận.");
-      setMonitoredEmails(await listMonitoredEmails(token));
-      setMonitoredFeed(await getMonitoredEmailFeed(token, 100));
+      const [emails, feed] = await Promise.all([
+        ensureAuthorized(() => listMonitoredEmails(token)),
+        ensureAuthorized(() => getMonitoredEmailFeed(token, 100)),
+      ]);
+      if (emails) setMonitoredEmails(emails);
+      if (feed) setMonitoredFeed(feed);
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
@@ -287,6 +310,35 @@ export function Dashboard() {
     alerts: alerts.length,
     critical: alerts.filter((item) => item.severity === "Critical").length,
   }), [alerts, logs]);
+
+  function isUnauthorizedError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return message.includes("401") || message.includes("invalid token") || message.includes("inactive user") || message.includes("missing bearer token");
+  }
+
+  function handleUnauthorized(error: unknown) {
+    if (!isUnauthorizedError(error)) return;
+    localStorage.removeItem("ai_soc_token");
+    setToken(null);
+    setCurrentUser(null);
+    setDeviceConsent(false);
+    setLogs([]);
+    setAlerts([]);
+    setNotifications([]);
+    setMonitoredFeed([]);
+    setConnection("offline");
+    setError("Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.");
+  }
+
+  async function ensureAuthorized<T>(fn: () => Promise<T>): Promise<T | null> {
+    try {
+      return await fn();
+    } catch (error) {
+      handleUnauthorized(error);
+      throw error;
+    }
+  }
 
   if (!token) {
     return (
