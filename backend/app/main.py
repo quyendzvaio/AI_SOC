@@ -6,7 +6,7 @@ from fastapi.responses import ORJSONResponse
 
 from app.core.config import get_settings
 from app.db import create_all
-from app.routers import auth, ingest, internal, resources, stream
+from app.routers import auth, emails, ingest, internal, logs, resources, stream
 from app.services.kafka import start_kafka, stop_kafka
 
 
@@ -32,6 +32,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(ingest.router)
 app.include_router(internal.router)
+app.include_router(logs.router)
+app.include_router(emails.router)
 app.include_router(resources.router)
 app.include_router(stream.router)
 

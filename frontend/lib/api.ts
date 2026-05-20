@@ -11,9 +11,18 @@ export type RuntimeConfig = {
   llm_base_url?: string | null;
   llm_model?: string | null;
   llm_api_key?: string | null;
-  abuseipdb_api_key?: string | null;
-  virustotal_api_key?: string | null;
-  nvd_api_key?: string | null;
+  smtp_host?: string | null;
+  smtp_port?: string | null;
+  smtp_username?: string | null;
+  smtp_password?: string | null;
+  smtp_from?: string | null;
+  imap_host?: string | null;
+  imap_port?: string | null;
+  imap_user?: string | null;
+  imap_password?: string | null;
+  imap_folder?: string | null;
+  imap_backfill_limit?: string | null;
+  imap_user_verified?: string | null;
 };
 
 export type DeviceConsent = {
@@ -21,11 +30,9 @@ export type DeviceConsent = {
   granted_at: string | null;
 };
 
-export type MonitoredEmail = {
-  id: string | null;
-  email: string | null;
+export type ImapEmailResponse = {
+  imap_user: string | null;
   is_verified: boolean;
-  provider: string;
   otp_required: boolean;
   dev_otp?: string | null;
   message?: string | null;
@@ -56,6 +63,58 @@ export type AlertItem = {
   ai_summary: string;
   rule_name: string | null;
   detected_at: string;
+};
+
+export type TriageItem = {
+  alert_id: string;
+  risk_score: number;
+  confidence: number;
+  priority: string;
+  mitre_techniques: string[];
+  threat_labels: string[];
+  recommendations: string[];
+};
+
+export type SocMetrics = {
+  total_logs: number;
+  total_alerts: number;
+  open_alerts: number;
+  critical_alerts: number;
+  high_alerts: number;
+  total_incidents: number;
+  feedback_count: number;
+  true_positive_feedback: number;
+  false_positive_feedback: number;
+  generated_rules: number;
+  top_mitre: Array<{ technique: string; count: number }>;
+};
+
+export type KnowledgeHit = {
+  title: string;
+  source: string;
+  text: string;
+  score: number;
+};
+
+export type RuleSuggestion = {
+  id: string;
+  source_alert_id: string | null;
+  name: string;
+  rule_type: string;
+  rule_body: Record<string, unknown>;
+  backtest_summary: Record<string, unknown>;
+  status: string;
+  created_at: string;
+};
+
+export type AnalystFeedback = {
+  id: string;
+  alert_id: string;
+  verdict: string;
+  corrected_severity: AlertItem["severity"] | null;
+  corrected_mitre: string[];
+  notes: string;
+  created_at: string;
 };
 
 export type NotificationItem = {
@@ -95,7 +154,23 @@ export type EmailMessage = {
   received_at: string;
 };
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+function resolveApiBaseUrl() {
+  const configured = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+  if (typeof window === "undefined") return configured;
+  try {
+    const url = new URL(configured);
+    const uiHost = window.location.hostname;
+    if ((url.hostname === "localhost" || url.hostname === "127.0.0.1") && uiHost && uiHost !== url.hostname) {
+      url.hostname = uiHost;
+      return url.origin;
+    }
+    return url.origin;
+  } catch {
+    return configured;
+  }
+}
+
+export const API_BASE_URL = resolveApiBaseUrl();
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -171,8 +246,8 @@ export function getMe(token: string) {
   return authed<User>("/me", token);
 }
 
-export function getMonitoredEmailFeed(token: string, limit = 100) {
-  return authed<EmailMessage[]>(`/emails/monitored?limit=${limit}`, token);
+export function getMailboxEmailFeed(token: string, limit = 100) {
+  return authed<EmailMessage[]>(`/emails/mailbox?limit=${limit}`, token);
 }
 
 export type NotifEmailResponse = {
@@ -222,14 +297,30 @@ export function saveRuntimeConfig(token: string, config: RuntimeConfig) {
   return authedPost<RuntimeConfig>("/settings/runtime-config", token, config);
 }
 
-export function requestMonitoredEmail(token: string, email: string) {
-  return authedPost<MonitoredEmail>("/settings/monitored-email", token, { email });
+export function requestImapEmailOtp(token: string, imapUser: string) {
+  return authedPost<ImapEmailResponse>("/settings/imap-email/otp", token, { imap_user: imapUser });
 }
 
-export function verifyMonitoredEmail(token: string, email: string, otp: string) {
-  return authedPost<MonitoredEmail>("/settings/monitored-email/verify", token, { email, otp });
+export function verifyImapEmail(token: string, imapUser: string, otp: string) {
+  return authedPost<ImapEmailResponse>("/settings/imap-email/verify", token, { imap_user: imapUser, otp });
 }
 
-export function listMonitoredEmails(token: string) {
-  return authed<MonitoredEmail[]>("/settings/monitored-email", token);
+export function getSocMetrics(token: string) {
+  return authed<SocMetrics>("/metrics/soc", token);
+}
+
+export function getAlertTriage(token: string, alertId: string) {
+  return authed<TriageItem>(`/alerts/${alertId}/triage`, token);
+}
+
+export function searchKnowledge(token: string, query: string, limit = 6) {
+  return authed<KnowledgeHit[]>(`/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`, token);
+}
+
+export function submitFeedback(token: string, alertId: string, verdict: string, notes = "") {
+  return authedPost<AnalystFeedback>("/feedback", token, { alert_id: alertId, verdict, notes });
+}
+
+export function suggestRule(token: string, alertId: string) {
+  return authedPost<RuleSuggestion>(`/rules/suggest/${alertId}`, token, {});
 }

@@ -2,8 +2,8 @@
 
     Constraints (Ràng buộc):
         Phải sử dụng PostgreSQL (đã có sẵn trên server) cho dữ liệu chính.
-        Phải sử dụng Qdrant cho lưu trữ vector embedding.
         Phải sử dụng Apache Kafka cho streaming logs.
+        RAG dùng lexical retrieval/BM25-lite và reranking nhẹ để giảm độ phức tạp khi chạy local.
         Không dùng thư viện trả phí trong phần mềm (miễn phí hoặc mã nguồn mở).
         Triển khai: Docker/Kubernetes (theo yêu cầu vận hành).
         API OpenAI/DeepSeek cần key riêng (sẽ cấp trước khi triển khai).

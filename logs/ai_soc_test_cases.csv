@@ -1,0 +1,12 @@
+case_id,name,dataset_basis,source_type,expected_alert,expected_severity,predicted_alert,predicted_severity,classification_correct,severity_correct,explanation_hit_rate,latency_ms,http_status,log_id,alert_id,notes,input
+CASE-01,Normal Login,UNSW-NB15/CICIDS2017 benign login pattern,ubuntu_agent,False,None,False,None,True,True,0.0,7.267558999956236,202,f6bdca71-c94b-4234-a231-f4e50b1490a0,,,User john logged in successfully from internal IP 192.168.1.5
+CASE-02,Brute Force Attack,CICIDS2017 SSH brute-force simulation,ubuntu_agent,True,High,True,High,True,True,0.6666666666666666,12.292735999835713,202,b09f5a5f-cc6d-4317-b0b9-38d081f81018,a2234315-0d78-48b3-a1d2-d68fb626a5fd,,100 failed SSH login attempts from IP 45.21.90.2 within 3 minutes
+CASE-03,Suspicious Country Login,UNSW-NB15 account abuse simulation,webhook,True,High,True,High,True,True,0.0,12.292360000174085,202,735680d1-fbca-426c-a4f0-091e7ca96ea4,379d1c92-931f-4b34-acdd-1fd37ea70d5b,,Admin login from Russia at 03:12 AM after multiple failed attempts
+CASE-04,Malware Download,CICIDS2017 malware download simulation,windows_agent,True,High,True,High,True,True,0.5,12.307120000059513,202,4b178236-5f67-46b3-877f-6391ddf0374c,f17c3efd-8ae7-482c-8c71-de52b6969d3f,,Downloaded suspicious.exe from unknown domain
+CASE-05,SQL Injection,CSIC HTTP Dataset SQL injection pattern,webhook,True,High,True,High,True,True,1.0,12.018148000151996,202,6a992a94-ffb1-468c-8c70-8453ed83a3c8,c7dfdbdc-b13e-4d80-a366-b6732002fd53,,GET /login.php?id=' OR 1=1 --
+CASE-06,Phishing Email,PhishTank/Enron email phishing simulation,email,True,High,True,High,True,True,1.0,13.75001099995643,202,c8f1b463-cced-462d-af3e-61ed1731cac3,ed8d3112-ef1e-4a19-ab16-87da3aa66029,,"Subject: Reset your bank account password immediately
+
+Click here to verify your account:
+http://fake-bank-login-security.ru"
+CASE-07,Spam Email,SpamAssassin promotional spam simulation,email,True,Medium,True,Medium,True,True,1.0,13.567727000008745,202,962c2c2d-cf08-4c6f-8392-b2a9e88aaa36,206390df-3626-46a5-8514-a9e72c0e996e,,Congratulations! You won an iPhone!
+CASE-08,Malware Attachment,Enron/SpamAssassin malware attachment simulation,email,True,High,True,High,True,True,1.0,13.783875000171975,202,d7049666-edf3-4f96-90b8-4e1a2aec47ab,f9df3ca7-4d6b-41c3-bbb7-1c6a8c6c95d4,,Attachment: invoice.exe

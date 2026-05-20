@@ -151,6 +151,15 @@ class VerifyNotificationEmailIn(ApiModel):
     otp: str = Field(min_length=6, max_length=6)
 
 
+class ImapEmailOtpIn(ApiModel):
+    imap_user: EmailStr
+
+
+class VerifyImapEmailIn(ApiModel):
+    imap_user: EmailStr
+    otp: str = Field(min_length=6, max_length=6)
+
+
 class NotificationEmailOut(ApiModel):
     notification_email: str | None = None
     is_notification_email_verified: bool = False
@@ -175,6 +184,17 @@ class RuntimeConfigIn(ApiModel):
     abuseipdb_api_key: str | None = None
     virustotal_api_key: str | None = None
     nvd_api_key: str | None = None
+    smtp_host: str | None = None
+    smtp_port: str | None = None
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    imap_host: str | None = None
+    imap_port: str | None = None
+    imap_user: str | None = None
+    imap_password: str | None = None
+    imap_folder: str | None = None
+    imap_backfill_limit: str | None = None
 
 
 class RuntimeConfigOut(ApiModel):
@@ -184,22 +204,23 @@ class RuntimeConfigOut(ApiModel):
     abuseipdb_api_key: str | None = None
     virustotal_api_key: str | None = None
     nvd_api_key: str | None = None
+    smtp_host: str | None = None
+    smtp_port: str | None = None
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    imap_host: str | None = None
+    imap_port: str | None = None
+    imap_user: str | None = None
+    imap_password: str | None = None
+    imap_folder: str | None = None
+    imap_backfill_limit: str | None = None
+    imap_user_verified: str | None = None
 
 
-class MonitoredEmailIn(ApiModel):
-    email: EmailStr
-
-
-class VerifyMonitoredEmailIn(ApiModel):
-    email: EmailStr
-    otp: str = Field(min_length=6, max_length=6)
-
-
-class MonitoredEmailOut(ApiModel):
-    id: uuid.UUID | None = None
-    email: str | None = None
+class ImapEmailOut(ApiModel):
+    imap_user: str | None = None
     is_verified: bool = False
-    provider: str = "smtp_auth"
     otp_required: bool = False
     dev_otp: str | None = None
     message: str | None = None
@@ -233,3 +254,63 @@ class EnrichmentIn(ApiModel):
     ai_summary: str | None = None
     rule_name: str | None = Field(default=None, max_length=255)
     enrichment: dict[str, Any] = Field(default_factory=dict)
+
+
+class TriageOut(ApiModel):
+    alert_id: uuid.UUID
+    risk_score: float
+    confidence: float
+    priority: str
+    mitre_techniques: list[str] = Field(default_factory=list)
+    threat_labels: list[str] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class AnalystFeedbackIn(ApiModel):
+    alert_id: uuid.UUID
+    verdict: str = Field(pattern="^(true_positive|false_positive|false_negative|severity_wrong|mitre_wrong)$")
+    corrected_severity: Severity | None = None
+    corrected_mitre: list[str] = Field(default_factory=list)
+    notes: str = Field(default="", max_length=2000)
+
+
+class AnalystFeedbackOut(ApiModel):
+    id: uuid.UUID
+    alert_id: uuid.UUID
+    verdict: str
+    corrected_severity: Severity | None = None
+    corrected_mitre: list[str] = Field(default_factory=list)
+    notes: str
+    created_at: datetime
+
+
+class RuleSuggestionOut(ApiModel):
+    id: uuid.UUID
+    source_alert_id: uuid.UUID | None = None
+    name: str
+    rule_type: str
+    rule_body: dict[str, Any]
+    backtest_summary: dict[str, Any]
+    status: str
+    created_at: datetime
+
+
+class KnowledgeSearchOut(ApiModel):
+    title: str
+    source: str
+    text: str
+    score: float
+
+
+class SocMetricsOut(ApiModel):
+    total_logs: int
+    total_alerts: int
+    open_alerts: int
+    critical_alerts: int
+    high_alerts: int
+    total_incidents: int
+    feedback_count: int
+    true_positive_feedback: int
+    false_positive_feedback: int
+    generated_rules: int
+    top_mitre: list[dict[str, Any]]

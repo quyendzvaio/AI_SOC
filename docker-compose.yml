@@ -15,6 +15,12 @@ services:
       SMTP_FROM: ${SMTP_FROM:-ninhvanquyen2020@gmail.com}
       CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost:3000","http://127.0.0.1:3000","http://localhost:8000","http://127.0.0.1:8000"]}
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
+      VIRUSTOTAL_API_KEY: ${VIRUSTOTAL_API_KEY:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o-mini}
     ports:
       - "8000:8000"
     depends_on:
@@ -69,6 +75,7 @@ services:
       - /run/log/journal:/run/log/journal:ro
     depends_on:
       - api
+    restart: unless-stopped
 
   email-ingest:
     build:
@@ -78,14 +85,17 @@ services:
     environment:
       API_BASE_URL: http://api:8000
       INGEST_TOKEN: local-ingest-token
+      INTERNAL_TOKEN: local-internal-token
       IMAP_HOST: ${IMAP_HOST:-}
       IMAP_USER: ${IMAP_USER:-}
       IMAP_PASSWORD: ${IMAP_PASSWORD:-}
       IMAP_FOLDER: ${IMAP_FOLDER:-INBOX}
+      IMAP_BACKFILL_LIMIT: ${IMAP_BACKFILL_LIMIT:-50}
     ports:
       - "8010:8010"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
 volumes:
   postgres_data:

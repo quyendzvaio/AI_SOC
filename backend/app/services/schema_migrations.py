@@ -7,7 +7,7 @@ async def run_bootstrap_migrations(conn: AsyncConnection) -> None:
     # Postgres volumes usable as the MVP schema evolves.
     statements = [
         "ALTER TYPE otppurpose ADD VALUE IF NOT EXISTS 'verify_notification_email'",
-        "ALTER TYPE otppurpose ADD VALUE IF NOT EXISTS 'verify_monitored_email'",
+        "ALTER TYPE otppurpose ADD VALUE IF NOT EXISTS 'verify_imap_email'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS firebase_uid VARCHAR(128) UNIQUE",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(32) DEFAULT 'local'",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_email VARCHAR(255)",

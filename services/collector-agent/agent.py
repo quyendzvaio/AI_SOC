@@ -49,6 +49,19 @@ async def register(client: httpx.AsyncClient) -> str:
     return data["id"]
 
 
+async def register_with_retry(client: httpx.AsyncClient) -> str:
+    delay = 1.0
+    while True:
+        try:
+            collector_id = await register(client)
+            print(f"registered collector {collector_id}", flush=True)
+            return collector_id
+        except Exception as exc:
+            print(f"collector registration failed: {exc}; retrying in {delay:.1f}s", flush=True)
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, 15.0)
+
+
 async def heartbeat(client: httpx.AsyncClient, collector_id: str) -> None:
     while True:
         try:
@@ -178,7 +191,7 @@ async def shipper(client: httpx.AsyncClient, collector_id: str, queue: asyncio.Q
 async def main() -> None:
     headers = {"x-ingest-token": INGEST_TOKEN}
     async with httpx.AsyncClient(base_url=API_BASE_URL, headers=headers, timeout=15) as client:
-        collector_id = await register(client)
+        collector_id = await register_with_retry(client)
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=5000)
         tasks = [asyncio.create_task(heartbeat(client, collector_id)), asyncio.create_task(shipper(client, collector_id, queue))]
         if platform.system().lower() == "windows":

@@ -21,7 +21,6 @@ LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY") or os.gete
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 LLM_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "8"))
-ENABLE_LLM = os.getenv("ENABLE_LLM", "false").lower() == "true"
 
 
 async def fetch_runtime_config(client: httpx.AsyncClient) -> dict[str, str]:
@@ -99,7 +98,7 @@ async def llm_summary(client: httpx.AsyncClient, event: dict[str, Any], enrichme
     api_key = config.get("llm_api_key") or LLM_API_KEY
     base_url = (config.get("llm_base_url") or LLM_BASE_URL).rstrip("/")
     model = config.get("llm_model") or LLM_MODEL
-    if not (ENABLE_LLM and api_key):
+    if not api_key:
         return None
     prompt = (
         "You are a SOC analyst. Summarize this event in 3 concise sentences, "

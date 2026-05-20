@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Alert, EmailMessage, LogEvent, RuntimeSetting
 from app.services.crypto import decrypt_value
+from app.services.knowledge_base import all_knowledge_docs, retrieve_knowledge
 
 IP_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
 DOMAIN_RE = re.compile(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b")
@@ -131,7 +132,10 @@ async def _threat_intel_bundle(config: dict[str, str | None], indicators: dict[s
 
 
 async def _fetch_rag_docs(session: AsyncSession) -> list[dict[str, str]]:
-    docs: list[dict[str, str]] = []
+    docs: list[dict[str, str]] = [
+        {"title": doc["title"], "text": f"source={doc['source']} {doc['text']}"}
+        for doc in all_knowledge_docs()
+    ]
     log_rows = await session.execute(select(LogEvent).order_by(desc(LogEvent.received_at)).limit(120))
     for row in log_rows.scalars():
         docs.append(
@@ -168,7 +172,8 @@ async def answer_question(session: AsyncSession, question: str) -> str:
         raise RuntimeError("Thiếu LLM API key trong runtime settings hoặc biến môi trường LLM_API_KEY")
 
     docs = await _fetch_rag_docs(session)
-    ranked = _rerank(question, docs, top_k=8)
+    knowledge_hits = retrieve_knowledge(question, top_k=6)
+    ranked = _rerank(question, docs, top_k=10)
     if not ranked:
         ranked = docs[:5]
 
@@ -176,14 +181,16 @@ async def answer_question(session: AsyncSession, question: str) -> str:
     intel = await _threat_intel_bundle(config, indicators, question)
 
     context_lines = []
+    for idx, doc in enumerate(knowledge_hits, start=1):
+        context_lines.append(f"[KB{idx}] {doc['title']} ({doc['source']}, score={doc['score']}): {doc['text'][:650]}")
     for idx, doc in enumerate(ranked, start=1):
         context_lines.append(f"[{idx}] {doc['title']}: {doc['text'][:500]}")
     prompt = (
         "You are an AI SOC assistant. Use the provided RAG context and threat intel to answer.\n"
         "Return concise actionable analysis: risk level, evidence, and next actions.\n\n"
         f"Question: {question}\n\n"
-        "RAG Context:\n"
-        + "\n".join(context_lines[:8])
+        "Hybrid RAG Context (knowledge base + local telemetry):\n"
+        + "\n".join(context_lines[:12])
         + "\n\nThreat Intel:\n"
         + json.dumps(intel, ensure_ascii=False)
     )

@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Bell, Bot, DatabaseZap, LogOut, Mail, Radio, Settings, ShieldAlert, Terminal } from "lucide-react";
+import { Activity, Bell, Bot, DatabaseZap, FileSearch, Gauge, LogOut, Mail, Radio, Settings, ShieldAlert, Terminal } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -10,29 +10,36 @@ import {
   ChatMessage,
   EmailMessage,
   IncidentItem,
+  KnowledgeHit,
   LogItem,
-  MonitoredEmail,
   NotificationItem,
   RuntimeConfig,
+  RuleSuggestion,
+  SocMetrics,
+  TriageItem,
   User,
   authed,
+  getAlertTriage,
   getChatHistory,
   getDeviceConsent,
   getIncidents,
   getMe,
-  getMonitoredEmailFeed,
+  getMailboxEmailFeed,
   getRuntimeConfig,
-  listMonitoredEmails,
+  getSocMetrics,
   login,
   queryAssistant,
   register,
-  requestMonitoredEmail,
+  requestImapEmailOtp,
   requestNotificationEmail,
   removeNotificationEmail,
   saveRuntimeConfig,
+  searchKnowledge,
   streamUrl,
+  submitFeedback,
+  suggestRule,
   updateDeviceConsent,
-  verifyMonitoredEmail,
+  verifyImapEmail,
   verifyNotificationEmail,
   verifyOtp,
 } from "@/lib/api";
@@ -57,16 +64,20 @@ export function Dashboard() {
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [incidents, setIncidents] = useState<IncidentItem[]>([]);
+  const [socMetrics, setSocMetrics] = useState<SocMetrics | null>(null);
+  const [triageByAlert, setTriageByAlert] = useState<Record<string, TriageItem>>({});
+  const [ruleSuggestions, setRuleSuggestions] = useState<RuleSuggestion[]>([]);
+  const [knowledgeQuery, setKnowledgeQuery] = useState("brute force mitre");
+  const [knowledgeHits, setKnowledgeHits] = useState<KnowledgeHit[]>([]);
+  const [opsMessage, setOpsMessage] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
-  const [monitoredFeed, setMonitoredFeed] = useState<EmailMessage[]>([]);
+  const [mailboxFeed, setMailboxFeed] = useState<EmailMessage[]>([]);
   const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig>({});
   const [notifEmail, setNotifEmail] = useState("");
   const [notifOtp, setNotifOtp] = useState("");
-  const [monitoredEmail, setMonitoredEmail] = useState("");
-  const [monitoredOtp, setMonitoredOtp] = useState("");
-  const [monitoredEmails, setMonitoredEmails] = useState<MonitoredEmail[]>([]);
+  const [imapOtp, setImapOtp] = useState("");
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsLoading, setSettingsLoading] = useState(false);
   const feedRef = useRef<HTMLDivElement | null>(null);
@@ -87,7 +98,14 @@ export function Dashboard() {
     events.addEventListener("ready", () => setConnection("live"));
     events.addEventListener("log", (message) => {
       const payload = JSON.parse((message as MessageEvent).data) as LiveEvent;
-      if (payload.log) setLogs((items) => [ensureTime(payload.log!), ...items].slice(0, 200));
+      if (payload.log) {
+        setLogs((items) => [ensureTime(payload.log!), ...items].slice(0, 200));
+        if (payload.log.source_type === "email") {
+          void ensureAuthorized(() => getMailboxEmailFeed(token, 100)).then((feed) => {
+            if (feed) setMailboxFeed(feed);
+          }).catch(() => {});
+        }
+      }
       if (payload.alert) setAlerts((items) => [payload.alert!, ...items.filter((item) => item.id !== payload.alert!.id)].slice(0, 120));
       requestAnimationFrame(() => {
         if (feedRef.current) feedRef.current.scrollTop = 0;
@@ -106,18 +124,19 @@ export function Dashboard() {
 
   async function loadSnapshot(authToken: string) {
     try {
-      const [nextLogs, nextAlerts, nextNotifications, nextIncidents, nextMonitoredFeed] = await Promise.all([
+      const [nextLogs, nextAlerts, nextNotifications, nextIncidents, nextMailboxFeed] = await Promise.all([
         authed<LogItem[]>("/logs?limit=80", authToken),
         authed<AlertItem[]>("/alerts?limit=50", authToken),
         authed<NotificationItem[]>("/notifications?limit=50", authToken),
         getIncidents(authToken),
-        getMonitoredEmailFeed(authToken, 100),
+        getMailboxEmailFeed(authToken, 100),
       ]);
       setLogs(nextLogs);
       setAlerts(nextAlerts);
       setNotifications(nextNotifications);
       setIncidents(nextIncidents);
-      setMonitoredFeed(nextMonitoredFeed);
+      setMailboxFeed(nextMailboxFeed);
+      void refreshSocMetrics(authToken);
     } catch (error) {
       handleUnauthorized(error);
       return;
@@ -130,7 +149,6 @@ export function Dashboard() {
     try {
       setDeviceConsent((await getDeviceConsent(authToken)).granted);
       setRuntimeConfig(await getRuntimeConfig(authToken));
-      setMonitoredEmails(await listMonitoredEmails(authToken));
     } catch {}
   }
 
@@ -221,6 +239,63 @@ export function Dashboard() {
         setChatHistory((await getChatHistory(token)).reverse());
       } catch {}
     }
+    if (nextPage === "alerts" && token) {
+      void refreshSocMetrics(token);
+    }
+  }
+
+  async function refreshSocMetrics(authToken = token) {
+    if (!authToken) return;
+    try {
+      setSocMetrics(await getSocMetrics(authToken));
+    } catch {}
+  }
+
+  async function loadAlertTriage(alertId: string) {
+    if (!token) return;
+    setOpsMessage("");
+    try {
+      const triage = await ensureAuthorized(() => getAlertTriage(token, alertId));
+      if (triage) setTriageByAlert((items) => ({ ...items, [alertId]: triage }));
+    } catch (error) {
+      setOpsMessage(messageOf(error));
+    }
+  }
+
+  async function sendAlertFeedback(alertId: string, verdict: string) {
+    if (!token) return;
+    setOpsMessage("");
+    try {
+      await ensureAuthorized(() => submitFeedback(token, alertId, verdict, verdict === "false_positive" ? "Marked from dashboard" : ""));
+      setOpsMessage("Đã ghi nhận feedback analyst.");
+      void refreshSocMetrics(token);
+    } catch (error) {
+      setOpsMessage(messageOf(error));
+    }
+  }
+
+  async function createRuleSuggestion(alertId: string) {
+    if (!token) return;
+    setOpsMessage("");
+    try {
+      const rule = await ensureAuthorized(() => suggestRule(token, alertId));
+      if (rule) setRuleSuggestions((items) => [rule, ...items.filter((item) => item.id !== rule.id)].slice(0, 8));
+      setOpsMessage("Đã sinh rule draft từ alert.");
+      void refreshSocMetrics(token);
+    } catch (error) {
+      setOpsMessage(messageOf(error));
+    }
+  }
+
+  async function runKnowledgeSearch() {
+    if (!token || !knowledgeQuery.trim()) return;
+    setOpsMessage("");
+    try {
+      const hits = await ensureAuthorized(() => searchKnowledge(token, knowledgeQuery.trim(), 6));
+      if (hits) setKnowledgeHits(hits);
+    } catch (error) {
+      setOpsMessage(messageOf(error));
+    }
   }
 
   async function saveSettingsConfig() {
@@ -229,7 +304,7 @@ export function Dashboard() {
     setSettingsMessage("");
     try {
       setRuntimeConfig(await saveRuntimeConfig(token, runtimeConfig));
-      setSettingsMessage("Đã lưu API keys/base URL.");
+      setSettingsMessage("Đã lưu cấu hình runtime. SMTP dùng ngay cho OTP/alert; IMAP sẽ được email-ingest đọc từ backend, restart email-ingest để backfill lại mail cũ.");
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
@@ -265,39 +340,40 @@ export function Dashboard() {
     setSettingsLoading(false);
   }
 
-  async function requestMonitorEmail() {
+  async function requestImapOtp() {
     if (!token) return;
+    const imapUser = (runtimeConfig.imap_user || "").trim();
+    if (!imapUser) {
+      setSettingsMessage("Cần nhập IMAP User trước khi gửi OTP.");
+      return;
+    }
     setSettingsLoading(true);
     try {
-      const result = await ensureAuthorized(() => requestMonitoredEmail(token, monitoredEmail));
+      const result = await ensureAuthorized(() => requestImapEmailOtp(token, imapUser));
       if (!result) return;
-      setSettingsMessage(result.message || "Đã gửi email xác nhận quyền theo dõi.");
-      if (result.dev_otp) setMonitoredOtp(result.dev_otp);
-      const next = await ensureAuthorized(() => listMonitoredEmails(token));
-      if (next) setMonitoredEmails(next);
+      setRuntimeConfig((config) => ({ ...config, imap_user: result.imap_user, imap_user_verified: null }));
+      setSettingsMessage(result.message || "Đã gửi OTP xác nhận mailbox IMAP.");
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
     setSettingsLoading(false);
   }
 
-  async function verifyMonitorEmail() {
+  async function verifyImapOtp() {
     if (!token) return;
-    if (!monitoredEmail.trim()) {
-      setSettingsMessage("Cần nhập đúng email theo dõi trước khi xác nhận OTP.");
+    const imapUser = (runtimeConfig.imap_user || "").trim();
+    if (!imapUser) {
+      setSettingsMessage("Cần nhập IMAP User trước khi xác nhận OTP.");
       return;
     }
     setSettingsLoading(true);
     try {
-      const result = await ensureAuthorized(() => verifyMonitoredEmail(token, monitoredEmail, monitoredOtp));
+      const result = await ensureAuthorized(() => verifyImapEmail(token, imapUser, imapOtp));
       if (!result) return;
-      setSettingsMessage(result.message || "Email theo dõi đã xác nhận.");
-      const [emails, feed] = await Promise.all([
-        ensureAuthorized(() => listMonitoredEmails(token)),
-        ensureAuthorized(() => getMonitoredEmailFeed(token, 100)),
-      ]);
-      if (emails) setMonitoredEmails(emails);
-      if (feed) setMonitoredFeed(feed);
+      setRuntimeConfig((config) => ({ ...config, imap_user: result.imap_user, imap_user_verified: result.imap_user }));
+      setSettingsMessage(result.message || "Mailbox IMAP đã xác nhận. Restart email-ingest để backfill mail cũ.");
+      const feed = await ensureAuthorized(() => getMailboxEmailFeed(token, 100));
+      if (feed) setMailboxFeed(feed);
     } catch (error) {
       setSettingsMessage(messageOf(error));
     }
@@ -326,7 +402,7 @@ export function Dashboard() {
     setLogs([]);
     setAlerts([]);
     setNotifications([]);
-    setMonitoredFeed([]);
+    setMailboxFeed([]);
     setConnection("offline");
     setError("Phiên đăng nhập đã hết hạn hoặc không hợp lệ. Vui lòng đăng nhập lại.");
   }
@@ -386,9 +462,25 @@ export function Dashboard() {
         </div>
 
         {!deviceConsent && page !== "settings" && <ConsentGate onGrant={() => grantDeviceConsent(true)} />}
-        {deviceConsent && page === "dashboard" && <DashboardView metrics={metrics} logs={logs} alerts={alerts} notifications={notifications} monitoredFeed={monitoredFeed} feedRef={feedRef} />}
+        {deviceConsent && page === "dashboard" && <DashboardView metrics={metrics} logs={logs} alerts={alerts} notifications={notifications} mailboxFeed={mailboxFeed} feedRef={feedRef} />}
         {deviceConsent && page === "logs" && <LogsView logs={logs} />}
-        {page === "alerts" && <AlertsView alerts={alerts} incidents={incidents} />}
+        {page === "alerts" && (
+          <AlertsView
+            alerts={alerts}
+            incidents={incidents}
+            socMetrics={socMetrics}
+            triageByAlert={triageByAlert}
+            ruleSuggestions={ruleSuggestions}
+            knowledgeQuery={knowledgeQuery}
+            setKnowledgeQuery={setKnowledgeQuery}
+            knowledgeHits={knowledgeHits}
+            opsMessage={opsMessage}
+            onLoadTriage={loadAlertTriage}
+            onFeedback={sendAlertFeedback}
+            onSuggestRule={createRuleSuggestion}
+            onKnowledgeSearch={runKnowledgeSearch}
+          />
+        )}
         {page === "chat" && <ChatView history={chatHistory} input={chatInput} setInput={setChatInput} loading={chatLoading} onSend={sendChat} />}
         {page === "settings" && (
           <SettingsView
@@ -410,13 +502,10 @@ export function Dashboard() {
               setCurrentUser(await getMe(token));
               setNotifEmail("");
             }}
-            monitoredEmail={monitoredEmail}
-            setMonitoredEmail={setMonitoredEmail}
-            monitoredOtp={monitoredOtp}
-            setMonitoredOtp={setMonitoredOtp}
-            monitoredEmails={monitoredEmails}
-            onRequestMonitor={requestMonitorEmail}
-            onVerifyMonitor={verifyMonitorEmail}
+            imapOtp={imapOtp}
+            setImapOtp={setImapOtp}
+            onRequestImapOtp={requestImapOtp}
+            onVerifyImapOtp={verifyImapOtp}
             message={settingsMessage}
             loading={settingsLoading}
           />
@@ -441,7 +530,7 @@ function ConsentGate({ onGrant }: { onGrant: () => void }) {
   );
 }
 
-function DashboardView({ metrics, logs, alerts, notifications, monitoredFeed, feedRef }: { metrics: { logs: number; emailLogs: number; alerts: number; critical: number }; logs: LogItem[]; alerts: AlertItem[]; notifications: NotificationItem[]; monitoredFeed: EmailMessage[]; feedRef: React.RefObject<HTMLDivElement | null> }) {
+function DashboardView({ metrics, logs, alerts, notifications, mailboxFeed, feedRef }: { metrics: { logs: number; emailLogs: number; alerts: number; critical: number }; logs: LogItem[]; alerts: AlertItem[]; notifications: NotificationItem[]; mailboxFeed: EmailMessage[]; feedRef: React.RefObject<HTMLDivElement | null> }) {
   return (
     <>
       <section className="grid summary-grid">
@@ -457,8 +546,8 @@ function DashboardView({ metrics, logs, alerts, notifications, monitoredFeed, fe
           </div>
         </Panel>
         <div className="grid">
-          <Panel title="Mail theo dõi đã nhận" badge={`${monitoredFeed.length} mails`}>
-            {monitoredFeed.length === 0 ? <Empty text="Chưa có mail nào trùng với email theo dõi đã xác thực." /> : monitoredFeed.slice(0, 12).map((mail) => (
+          <Panel title="Mailbox IMAP đã nhận" badge={`${mailboxFeed.length} mails`}>
+            {mailboxFeed.length === 0 ? <Empty text="Chưa có mail nào từ mailbox IMAP đã xác thực." /> : mailboxFeed.slice(0, 12).map((mail) => (
               <div className="alert-row" key={mail.id}>
                 <div className="timestamp">{formatTime(mail.received_at)}</div>
                 <div>
@@ -492,11 +581,123 @@ function LogsView({ logs }: { logs: LogItem[] }) {
   );
 }
 
-function AlertsView({ alerts, incidents }: { alerts: AlertItem[]; incidents: IncidentItem[] }) {
+function AlertsView({
+  alerts,
+  incidents,
+  socMetrics,
+  triageByAlert,
+  ruleSuggestions,
+  knowledgeQuery,
+  setKnowledgeQuery,
+  knowledgeHits,
+  opsMessage,
+  onLoadTriage,
+  onFeedback,
+  onSuggestRule,
+  onKnowledgeSearch,
+}: {
+  alerts: AlertItem[];
+  incidents: IncidentItem[];
+  socMetrics: SocMetrics | null;
+  triageByAlert: Record<string, TriageItem>;
+  ruleSuggestions: RuleSuggestion[];
+  knowledgeQuery: string;
+  setKnowledgeQuery: (value: string) => void;
+  knowledgeHits: KnowledgeHit[];
+  opsMessage: string;
+  onLoadTriage: (alertId: string) => void;
+  onFeedback: (alertId: string, verdict: string) => void;
+  onSuggestRule: (alertId: string) => void;
+  onKnowledgeSearch: () => void;
+}) {
   return (
-    <div className="grid main-grid">
-      <Panel title="Alerts" badge={`${alerts.length} total`}><div className="feed">{alerts.length === 0 ? <Empty text="Không có cảnh báo mới." /> : alerts.map((item) => <AlertRow key={item.id} item={item} />)}</div></Panel>
-      <Panel title="Incidents" badge={`${incidents.length} total`}><div className="feed">{incidents.length === 0 ? <Empty text="Không có incident." /> : incidents.map((item) => <div className="alert-row" key={item.id}><div className="timestamp">{formatTime(item.created_at)}</div><div><div className="source">{item.name}</div><div className="summary">{item.description}</div></div><span className={`badge sev-${item.severity}`}>{item.severity}</span></div>)}</div></Panel>
+    <>
+      <section className="grid summary-grid">
+        <Metric label="Open alerts" value={socMetrics?.open_alerts ?? alerts.length} icon={<ShieldAlert size={18} />} />
+        <Metric label="High/Critical" value={(socMetrics?.high_alerts ?? 0) + (socMetrics?.critical_alerts ?? 0)} icon={<Gauge size={18} />} />
+        <Metric label="Feedback" value={socMetrics?.feedback_count ?? 0} icon={<Activity size={18} />} />
+        <Metric label="Generated rules" value={socMetrics?.generated_rules ?? ruleSuggestions.length} icon={<FileSearch size={18} />} />
+      </section>
+      {opsMessage && <div className="settings-message" style={{ marginBottom: 14 }}>{opsMessage}</div>}
+      <div className="grid main-grid">
+        <Panel title="Alerts triage & feedback" badge={`${alerts.length} total`}>
+          <div className="feed">
+            {alerts.length === 0 ? <Empty text="Không có cảnh báo mới." /> : alerts.map((item) => (
+              <AlertOpsRow
+                key={item.id}
+                item={item}
+                triage={triageByAlert[item.id]}
+                onLoadTriage={onLoadTriage}
+                onFeedback={onFeedback}
+                onSuggestRule={onSuggestRule}
+              />
+            ))}
+          </div>
+        </Panel>
+        <div className="grid">
+          <Panel title="Incidents" badge={`${incidents.length} total`}>
+            <div className="compact-feed">{incidents.length === 0 ? <Empty text="Không có incident." /> : incidents.map((item) => <div className="alert-row" key={item.id}><div className="timestamp">{formatTime(item.created_at)}</div><div><div className="source">{item.name}</div><div className="summary">{item.description}</div></div><span className={`badge sev-${item.severity}`}>{item.severity}</span></div>)}</div>
+          </Panel>
+          <Panel title="Knowledge search" badge={`${knowledgeHits.length} hits`}>
+            <div className="settings-body">
+              <div className="inline-search">
+                <input className="input" value={knowledgeQuery} onChange={(event) => setKnowledgeQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") onKnowledgeSearch(); }} placeholder="MITRE, CVE, phishing..." />
+                <button className="button" type="button" onClick={onKnowledgeSearch}>Tìm</button>
+              </div>
+              <div className="mini-list">
+                {knowledgeHits.length === 0 ? <Empty text="Tìm trong knowledge base MITRE/CVE/playbook." /> : knowledgeHits.map((item) => (
+                  <div className="knowledge-item" key={`${item.source}-${item.title}`}>
+                    <div className="source">{item.title}</div>
+                    <div className="muted">{item.source} - score {item.score.toFixed(2)}</div>
+                    <div className="summary">{item.text}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Panel>
+          <Panel title="Rule suggestions" badge={`${ruleSuggestions.length} drafts`}>
+            <div className="compact-feed">
+              {ruleSuggestions.length === 0 ? <Empty text="Chọn một alert rồi bấm Generate rule." /> : ruleSuggestions.map((item) => (
+                <div className="knowledge-item" key={item.id}>
+                  <div className="source">{item.name}</div>
+                  <div className="summary">{item.rule_type} - {item.status} - backtest {String(item.backtest_summary?.matches ?? 0)} matches</div>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function AlertOpsRow({ item, triage, onLoadTriage, onFeedback, onSuggestRule }: { item: AlertItem; triage?: TriageItem; onLoadTriage: (alertId: string) => void; onFeedback: (alertId: string, verdict: string) => void; onSuggestRule: (alertId: string) => void }) {
+  return (
+    <div className="alert-ops-row">
+      <div className="alert-row dense">
+        <div className="timestamp">{formatTime(item.detected_at)}</div>
+        <div>
+          <div className="source">{item.message}</div>
+          <div className="summary">{item.ai_summary}</div>
+          <div className="muted mono">{item.id}</div>
+        </div>
+        <span className={`badge sev-${item.severity}`}>{item.severity}</span>
+      </div>
+      {triage && (
+        <div className="triage-box">
+          <span className="badge green">{triage.priority}</span>
+          <span>Risk {triage.risk_score.toFixed(2)}</span>
+          <span>Confidence {triage.confidence.toFixed(2)}</span>
+          <span>{triage.mitre_techniques.join(", ") || "No MITRE"}</span>
+          <div className="summary">{triage.recommendations.join(" ")}</div>
+        </div>
+      )}
+      <div className="button-row row-actions">
+        <button className="button secondary" type="button" onClick={() => onLoadTriage(item.id)}>Triage</button>
+        <button className="button secondary" type="button" onClick={() => onFeedback(item.id, "true_positive")}>True positive</button>
+        <button className="button secondary" type="button" onClick={() => onFeedback(item.id, "false_positive")}>False positive</button>
+        <button className="button" type="button" onClick={() => onSuggestRule(item.id)}>Generate rule</button>
+      </div>
     </div>
   );
 }
@@ -533,13 +734,10 @@ function SettingsView(props: {
   onRequestNotif: () => void;
   onVerifyNotif: () => void;
   onRemoveNotif: () => void;
-  monitoredEmail: string;
-  setMonitoredEmail: (email: string) => void;
-  monitoredOtp: string;
-  setMonitoredOtp: (otp: string) => void;
-  monitoredEmails: MonitoredEmail[];
-  onRequestMonitor: () => void;
-  onVerifyMonitor: () => void;
+  imapOtp: string;
+  setImapOtp: (otp: string) => void;
+  onRequestImapOtp: () => void;
+  onVerifyImapOtp: () => void;
   message: string;
   loading: boolean;
 }) {
@@ -558,12 +756,44 @@ function SettingsView(props: {
         </div>
       </Panel>
 
-      <Panel title="API keys & base URL" badge="encrypted">
+      <Panel title="Cloud LLM API" badge="encrypted">
         <div className="settings-body">
-          <label className="field">LLM Base URL<input className="input" value={c.llm_base_url || ""} onChange={(e) => update({ llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1" /></label>
+          <div className="muted" style={{ marginBottom: 12 }}>Dùng LLM cloud qua OpenAI-compatible API. Cấu hình này được backend và enrichment worker đọc trực tiếp khi phân tích.</div>
+          <label className="field">LLM Base URL<input className="input" value={c.llm_base_url || ""} onChange={(e) => update({ llm_base_url: e.target.value })} placeholder="https://api.openai.com/v1 hoặc https://api.deepseek.com/v1" /></label>
           <label className="field">LLM Model<input className="input" value={c.llm_model || ""} onChange={(e) => update({ llm_model: e.target.value })} placeholder="gpt-4o-mini hoặc deepseek-chat" /></label>
           <label className="field">LLM API Key<input className="input" value={c.llm_api_key || ""} onChange={(e) => update({ llm_api_key: e.target.value })} placeholder="sk-..." /></label>
           <button id="btn-save-runtime-config" className="button" type="button" disabled={props.loading} onClick={props.onSaveRuntimeConfig}>Lưu cấu hình</button>
+        </div>
+      </Panel>
+
+      <Panel title="SMTP gửi OTP/alert" badge="runtime">
+        <div className="settings-body">
+          <div className="muted" style={{ marginBottom: 12 }}>Tài khoản gửi OTP đăng ký/đăng nhập, OTP xác nhận mailbox IMAP và email alert.</div>
+          <label className="field">SMTP Host<input className="input" value={c.smtp_host || ""} onChange={(e) => update({ smtp_host: e.target.value })} placeholder="smtp.gmail.com" /></label>
+          <label className="field">SMTP Port<input className="input" value={c.smtp_port || ""} onChange={(e) => update({ smtp_port: e.target.value })} placeholder="465" /></label>
+          <label className="field">SMTP Username<input className="input" value={c.smtp_username || ""} onChange={(e) => update({ smtp_username: e.target.value })} placeholder="sender@gmail.com" /></label>
+          <label className="field">SMTP App Password<input className="input" type="password" value={c.smtp_password || ""} onChange={(e) => update({ smtp_password: e.target.value })} placeholder="Gmail app password" /></label>
+          <label className="field">SMTP From<input className="input" value={c.smtp_from || ""} onChange={(e) => update({ smtp_from: e.target.value })} placeholder="sender@gmail.com" /></label>
+          <button className="button" type="button" disabled={props.loading} onClick={props.onSaveRuntimeConfig}>Lưu SMTP</button>
+        </div>
+      </Panel>
+
+      <Panel title="IMAP đọc mailbox" badge="runtime">
+        <div className="settings-body">
+          <div className="muted" style={{ marginBottom: 12 }}>IMAP User là mailbox hệ thống đọc. Cần xác nhận OTP cho chính email này trước khi email-ingest được phép polling.</div>
+          <label className="field">IMAP Host<input className="input" value={c.imap_host || ""} onChange={(e) => update({ imap_host: e.target.value })} placeholder="imap.gmail.com" /></label>
+          <label className="field">IMAP Port<input className="input" value={c.imap_port || ""} onChange={(e) => update({ imap_port: e.target.value })} placeholder="993" /></label>
+          <label className="field">IMAP User<input className="input" value={c.imap_user || ""} onChange={(e) => update({ imap_user: e.target.value })} placeholder="mailbox@gmail.com" /></label>
+          <label className="field">IMAP App Password<input className="input" type="password" value={c.imap_password || ""} onChange={(e) => update({ imap_password: e.target.value })} placeholder="Gmail app password" /></label>
+          <label className="field">IMAP Folder<input className="input" value={c.imap_folder || ""} onChange={(e) => update({ imap_folder: e.target.value })} placeholder="INBOX" /></label>
+          <label className="field">Backfill Limit<input className="input" value={c.imap_backfill_limit || ""} onChange={(e) => update({ imap_backfill_limit: e.target.value })} placeholder="50" /></label>
+          <div className="muted">Trạng thái OTP: {c.imap_user && c.imap_user_verified === c.imap_user ? "đã xác nhận" : "chưa xác nhận"}</div>
+          <div className="button-row">
+            <button className="button" type="button" disabled={props.loading} onClick={props.onSaveRuntimeConfig}>Lưu IMAP</button>
+            <button className="button secondary" type="button" disabled={props.loading || !c.imap_user?.trim()} onClick={props.onRequestImapOtp}>Gửi OTP IMAP</button>
+          </div>
+          <label className="field">OTP IMAP<input className="input" value={props.imapOtp} onChange={(e) => props.setImapOtp(e.target.value)} /></label>
+          <button className="button" type="button" disabled={props.loading || !props.imapOtp.trim() || !c.imap_user?.trim()} onClick={props.onVerifyImapOtp}>Xác nhận IMAP</button>
         </div>
       </Panel>
 
@@ -579,17 +809,6 @@ function SettingsView(props: {
         </div>
       </Panel>
 
-      <Panel title="Email cần theo dõi" badge="requires acceptance">
-        <div className="settings-body">
-          <label className="field">Địa chỉ email theo dõi<input id="settings-monitored-email" className="input" value={props.monitoredEmail} onChange={(e) => props.setMonitoredEmail(e.target.value)} placeholder="mailbox@company.com" /></label>
-          <div className="button-row">
-            <button id="btn-request-monitor-email" className="button" type="button" disabled={props.loading || !props.monitoredEmail.trim()} onClick={props.onRequestMonitor}>Gửi email xác nhận</button>
-          </div>
-          <label className="field">Mã xác nhận<input id="settings-monitor-otp" className="input" value={props.monitoredOtp} onChange={(e) => props.setMonitoredOtp(e.target.value)} /></label>
-          <button id="btn-verify-monitor-email" className="button" type="button" disabled={props.loading || !props.monitoredOtp.trim()} onClick={props.onVerifyMonitor}>Xác nhận quyền theo dõi</button>
-          <div style={{ marginTop: 12 }}>{props.monitoredEmails.map((item) => <div className="summary" key={item.id || item.email}>{item.email} - {item.is_verified ? "đã xác nhận" : "chưa xác nhận"}</div>)}</div>
-        </div>
-      </Panel>
       {props.message && <div className="settings-message">{props.message}</div>}
     </div>
   );

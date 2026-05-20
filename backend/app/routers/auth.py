@@ -9,6 +9,7 @@ from app.core.security import create_access_token, generate_otp, hash_otp, hash_
 from app.db import get_session
 from app.models import OtpPurpose, OtpToken, User
 from app.schemas import AuthOut, LoginIn, RegisterIn, ResendOtpIn, UserOut, VerifyOtpIn
+from app.services.runtime_config import load_runtime_config
 from app.services.smtp_mail import send_smtp_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -44,10 +45,12 @@ async def register(payload: RegisterIn, session: AsyncSession = Depends(get_sess
     )
     await session.commit()
     try:
+        config = await load_runtime_config(session)
         send_smtp_email(
             user.email,
             "[AI-SOC] OTP đăng ký tài khoản",
             f"OTP xác thực đăng ký của bạn là: {otp}\nMã có hiệu lực trong {get_settings().otp_ttl_minutes} phút.",
+            config,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Gửi OTP qua SMTP thất bại: {str(exc)}") from exc
@@ -109,10 +112,12 @@ async def login(payload: LoginIn, session: AsyncSession = Depends(get_session)) 
     user.locked_until = None
     await session.commit()
     try:
+        config = await load_runtime_config(session)
         send_smtp_email(
             user.email,
             "[AI-SOC] OTP đăng nhập",
             f"OTP đăng nhập của bạn là: {otp}\nMã có hiệu lực trong {get_settings().otp_ttl_minutes} phút.",
+            config,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Gửi OTP qua SMTP thất bại: {str(exc)}") from exc
@@ -135,10 +140,12 @@ async def resend_otp(payload: ResendOtpIn, session: AsyncSession = Depends(get_s
     )
     await session.commit()
     try:
+        config = await load_runtime_config(session)
         send_smtp_email(
             user.email,
             "[AI-SOC] OTP xác thực",
             f"OTP của bạn là: {otp}\nMã có hiệu lực trong {get_settings().otp_ttl_minutes} phút.",
+            config,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Gửi OTP qua SMTP thất bại: {str(exc)}") from exc

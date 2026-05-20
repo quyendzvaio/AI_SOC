@@ -33,8 +33,8 @@ AI Worker (Kafka consumer) lấy messages từ topic:
 
     Xử lý tách trường (IP, user, action...), chuẩn hóa log.
     Gọi API Threat Intelligence (AbuseIPDB, VirusTotal, NVD) theo thực thể trích được.
-    Embed log content và search Qdrant (MITRE, playbooks).
-    Tập hợp ngữ cảnh cho LLM (log + MITRE + CVE + repu.).
+    Truy hồi ngữ cảnh bằng lexical retrieval/BM25-lite từ MITRE, playbook, CVE hints và log/email/alert gần nhất.
+    Tập hợp ngữ cảnh cho LLM (log + MITRE + CVE + reputation).
     Gửi prompt đến LLM, nhận kết quả phân tích.
 
 Nếu mức độ nguy hiểm vượt ngưỡng:
@@ -57,8 +57,9 @@ Flow 3: Trò chuyện với Trợ lý AI
 
     Người dùng mở mục Trợ lý ảo trong Dashboard.
     Nhập câu hỏi hoặc thông tin cần tra cứu (ví dụ: “Địa chỉ IP 1.2.3.4 có nguy hiểm không?”).
-    Hệ thống lấy input, chuyển vào quy trình RAG:
-        Embed truy vấn, tìm trong Qdrant (MITRE, playbook).
+    Hệ thống lấy input, chuyển vào quy trình RAG nhẹ:
+        Tokenize truy vấn, truy hồi ngữ cảnh bằng keyword overlap/BM25-lite từ MITRE, playbook, CVE hints và telemetry gần nhất.
+        Rerank kết quả bằng keyword overlap và IOC matching.
         Có thể gọi thêm API nếu cần (ví dụ: AbuseIPDB tìm IP).
         Soạn prompt với ngữ cảnh bổ sung.
         Gửi sang LLM để trả lời.

@@ -6,48 +6,44 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import current_user
-from app.models import AiQuery, Alert, AlertTag, EmailMessage, Incident, IncidentAlert, LogEvent, MonitoredEmail, Notification, RuntimeSetting, Tag, User
+from app.models import AiQuery, Alert, AlertTag, GeneratedRule, Incident, IncidentAlert, LogEvent, Notification, RuntimeSetting, Tag, User
 from app.schemas import (
     AlertOut,
     AlertPatchIn,
+    AnalystFeedbackIn,
+    AnalystFeedbackOut,
     AssistantQueryIn,
     AssistantQueryOut,
     DeviceConsentIn,
     DeviceConsentOut,
-    EmailMessageOut,
+    ImapEmailOtpIn,
+    ImapEmailOut,
     IncidentIn,
     IncidentOut,
-    LogOut,
-    MonitoredEmailIn,
-    MonitoredEmailOut,
+    KnowledgeSearchOut,
     NotificationOut,
+    RuleSuggestionOut,
     RuntimeConfigIn,
     RuntimeConfigOut,
+    SocMetricsOut,
     TagIn,
+    TriageOut,
     UserOut,
     UserSettingsIn,
-    VerifyMonitoredEmailIn,
+    VerifyImapEmailIn,
     VerifyNotificationEmailIn,
 )
 from app.services.crypto import decrypt_value, encrypt_value, mask_secret
 from app.services.smtp_mail import send_smtp_email
 from app.services.assistant_live import answer_question
+from app.services.feedback_service import create_feedback
+from app.services.knowledge_base import retrieve_knowledge
+from app.services.metrics_service import soc_metrics
+from app.services.runtime_config import load_runtime_config
+from app.services.rule_suggestion_service import suggest_rule_for_alert
+from app.services.triage_service import alert_triage_out
 
 router = APIRouter(dependencies=[Depends(current_user)])
-
-
-@router.get("/logs", response_model=list[LogOut])
-async def list_logs(limit: int = 50, session: AsyncSession = Depends(get_session)) -> list[LogEvent]:
-    result = await session.execute(select(LogEvent).order_by(desc(LogEvent.received_at)).limit(min(limit, 200)))
-    return list(result.scalars())
-
-
-@router.get("/logs/{log_id}", response_model=LogOut)
-async def get_log(log_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> LogEvent:
-    log = await session.get(LogEvent, log_id)
-    if not log:
-        raise HTTPException(status_code=404, detail="Log not found")
-    return log
 
 
 @router.get("/alerts", response_model=list[AlertOut])
@@ -62,6 +58,14 @@ async def get_alert(alert_id: uuid.UUID, session: AsyncSession = Depends(get_ses
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
+
+
+@router.get("/alerts/{alert_id}/triage", response_model=TriageOut)
+async def get_alert_triage(alert_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> dict:
+    alert = await get_alert(alert_id, session)
+    log = await session.get(LogEvent, alert.log_id)
+    triage = ((log.extracted_entities or {}).get("triage") if log else None) or {}
+    return alert_triage_out(alert.id, triage)
 
 
 @router.patch("/alerts/{alert_id}", response_model=AlertOut)
@@ -109,6 +113,44 @@ async def create_incident(payload: IncidentIn, session: AsyncSession = Depends(g
     return incident
 
 
+@router.get("/metrics/soc", response_model=SocMetricsOut)
+async def get_soc_metrics(session: AsyncSession = Depends(get_session)) -> dict:
+    return await soc_metrics(session)
+
+
+@router.get("/knowledge/search", response_model=list[KnowledgeSearchOut])
+async def search_knowledge(q: str, limit: int = 6) -> list[dict]:
+    return retrieve_knowledge(q, top_k=min(limit, 20))
+
+
+@router.post("/feedback", response_model=AnalystFeedbackOut)
+async def submit_feedback(
+    payload: AnalystFeedbackIn,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    try:
+        return await create_feedback(
+            session,
+            user,
+            payload.alert_id,
+            payload.verdict,
+            payload.corrected_severity,
+            payload.corrected_mitre,
+            payload.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/rules/suggest/{alert_id}", response_model=RuleSuggestionOut)
+async def suggest_rule(alert_id: uuid.UUID, session: AsyncSession = Depends(get_session)) -> GeneratedRule:
+    try:
+        return await suggest_rule_for_alert(session, alert_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.post("/assistant/query", response_model=AssistantQueryOut)
 async def assistant_query(
     payload: AssistantQueryIn,
@@ -128,34 +170,6 @@ async def assistant_query(
 async def list_notifications(limit: int = 50, session: AsyncSession = Depends(get_session)) -> list[Notification]:
     result = await session.execute(select(Notification).order_by(desc(Notification.created_at)).limit(min(limit, 200)))
     return list(result.scalars())
-
-
-@router.get("/emails", response_model=list[EmailMessageOut])
-async def list_emails(limit: int = 50, session: AsyncSession = Depends(get_session)) -> list[EmailMessage]:
-    result = await session.execute(select(EmailMessage).order_by(desc(EmailMessage.received_at)).limit(min(limit, 200)))
-    return list(result.scalars())
-
-
-@router.get("/emails/monitored", response_model=list[EmailMessageOut])
-async def list_monitored_emails_feed(
-    limit: int = 100,
-    user: User = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> list[EmailMessage]:
-    monitored_rows = await session.execute(
-        select(MonitoredEmail).where(MonitoredEmail.user_id == user.id, MonitoredEmail.is_verified.is_(True))
-    )
-    monitored_set = {row.email.lower() for row in monitored_rows.scalars()}
-    if not monitored_set:
-        return []
-    result = await session.execute(select(EmailMessage).order_by(desc(EmailMessage.received_at)).limit(min(limit, 500)))
-    matched: list[EmailMessage] = []
-    for mail in result.scalars():
-        sender = (mail.sender or "").lower()
-        recipients = [str(item).lower() for item in (mail.recipients or [])]
-        if sender in monitored_set or any(item in monitored_set for item in recipients):
-            matched.append(mail)
-    return matched[: min(limit, 200)]
 
 
 @router.get("/me", response_model=UserOut)
@@ -190,6 +204,18 @@ CONFIG_KEYS = {
     "abuseipdb_api_key": True,
     "virustotal_api_key": True,
     "nvd_api_key": True,
+    "smtp_host": False,
+    "smtp_port": False,
+    "smtp_username": False,
+    "smtp_password": True,
+    "smtp_from": False,
+    "imap_host": False,
+    "imap_port": False,
+    "imap_user": False,
+    "imap_password": True,
+    "imap_folder": False,
+    "imap_backfill_limit": False,
+    "imap_user_verified": False,
 }
 
 
@@ -209,103 +235,117 @@ async def update_runtime_config(
     session: AsyncSession = Depends(get_session),
 ) -> RuntimeConfigOut:
     for key, value in payload.model_dump(exclude_unset=True).items():
-        if key not in CONFIG_KEYS:
+        if key not in CONFIG_KEYS or key == "imap_user_verified":
             continue
+        if key == "imap_user":
+            current = await session.get(RuntimeSetting, "imap_user")
+            current_value = current.value_public if current else None
+            if (value or None) != current_value:
+                verified = await session.get(RuntimeSetting, "imap_user_verified")
+                if verified:
+                    verified.value_public = None
+                    verified.updated_by = user.id
         setting = await session.get(RuntimeSetting, key)
         if not setting:
             setting = RuntimeSetting(key=key, is_secret=CONFIG_KEYS[key])
             session.add(setting)
         setting.updated_by = user.id
         if CONFIG_KEYS[key]:
-            if value and "..." not in value and value != "****":
+            if value == "":
+                setting.value_encrypted = None
+            elif value and "..." not in value and value != "****":
                 setting.value_encrypted = encrypt_value(value)
         else:
-            setting.value_public = value
+            setting.value_public = value or None
     await session.commit()
     return await get_runtime_config(session)
 
 
-@router.post("/settings/monitored-email", response_model=MonitoredEmailOut)
-async def request_monitored_email(
-    payload: MonitoredEmailIn,
+@router.post("/settings/imap-email/otp", response_model=ImapEmailOut)
+async def request_imap_email_otp(
+    payload: ImapEmailOtpIn,
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
-) -> MonitoredEmailOut:
+) -> ImapEmailOut:
     from datetime import datetime, timedelta, timezone
     from app.core.config import get_settings
     from app.core.security import generate_otp, hash_otp
     from app.models import OtpPurpose, OtpToken
 
-    email_str = str(payload.email).lower()
-    monitored = await session.scalar(select(MonitoredEmail).where(MonitoredEmail.user_id == user.id, MonitoredEmail.email == email_str))
-    if not monitored:
-        monitored = MonitoredEmail(user_id=user.id, email=email_str, provider="smtp_auth")
-        session.add(monitored)
-        await session.flush()
-    monitored.is_verified = False
-    monitored.verified_at = None
+    email_str = str(payload.imap_user).lower()
+    imap_user = await session.get(RuntimeSetting, "imap_user")
+    if not imap_user:
+        imap_user = RuntimeSetting(key="imap_user", is_secret=False)
+        session.add(imap_user)
+    imap_user.value_public = email_str
+    imap_user.updated_by = user.id
+
+    verified = await session.get(RuntimeSetting, "imap_user_verified")
+    if not verified:
+        verified = RuntimeSetting(key="imap_user_verified", is_secret=False)
+        session.add(verified)
+    verified.value_public = None
+    verified.updated_by = user.id
+
     otp = generate_otp()
     session.add(
         OtpToken(
             user_id=user.id,
             otp_hash=hash_otp(otp),
-            purpose=OtpPurpose.verify_monitored_email,
+            purpose=OtpPurpose.verify_imap_email,
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=get_settings().otp_ttl_minutes),
         )
     )
     await session.commit()
     try:
+        config = await load_runtime_config(session)
         send_smtp_email(
             email_str,
-            "[AI-SOC] OTP xác nhận email theo dõi",
-            f"OTP xác nhận quyền theo dõi email là: {otp}",
+            "[AI-SOC] OTP xác nhận mailbox IMAP",
+            f"OTP xác nhận quyền đọc mailbox IMAP là: {otp}",
+            config,
         )
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Gửi OTP email theo dõi thất bại: {str(exc)}") from exc
-    return MonitoredEmailOut(
-        id=monitored.id,
-        email=monitored.email,
+        raise HTTPException(status_code=503, detail=f"Gửi OTP mailbox IMAP thất bại: {str(exc)}") from exc
+    return ImapEmailOut(
+        imap_user=email_str,
         is_verified=False,
         otp_required=True,
-        message=f"Đã gửi email xác nhận quyền theo dõi đến {email_str}.",
+        message=f"Đã gửi OTP xác nhận quyền đọc mailbox IMAP đến {email_str}.",
     )
 
 
-@router.post("/settings/monitored-email/verify", response_model=MonitoredEmailOut)
-async def verify_monitored_email(
-    payload: VerifyMonitoredEmailIn,
+@router.post("/settings/imap-email/verify", response_model=ImapEmailOut)
+async def verify_imap_email(
+    payload: VerifyImapEmailIn,
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
-) -> MonitoredEmailOut:
+) -> ImapEmailOut:
     from datetime import datetime, timezone
     from app.core.security import verify_otp
     from app.models import OtpPurpose, OtpToken
 
-    email_str = str(payload.email).lower()
-    monitored = await session.scalar(
-        select(MonitoredEmail).where(MonitoredEmail.user_id == user.id, MonitoredEmail.email == email_str)
-    )
-    if not monitored:
-        raise HTTPException(status_code=400, detail="Email theo dõi chưa được đăng ký")
+    email_str = str(payload.imap_user).lower()
+    imap_user = await session.get(RuntimeSetting, "imap_user")
+    if not imap_user or imap_user.value_public != email_str:
+        raise HTTPException(status_code=400, detail="IMAP User chưa khớp với mailbox đang cấu hình")
     token = await session.scalar(
         select(OtpToken)
-        .where(OtpToken.user_id == user.id, OtpToken.purpose == OtpPurpose.verify_monitored_email, OtpToken.consumed_at.is_(None))
+        .where(OtpToken.user_id == user.id, OtpToken.purpose == OtpPurpose.verify_imap_email, OtpToken.consumed_at.is_(None))
         .order_by(OtpToken.expires_at.desc())
     )
     now = datetime.now(timezone.utc)
     if not token or token.expires_at < now or not verify_otp(payload.otp, token.otp_hash):
         raise HTTPException(status_code=400, detail="Mã xác nhận không hợp lệ hoặc đã hết hạn")
     token.consumed_at = now
-    monitored.is_verified = True
-    monitored.verified_at = now
+    verified = await session.get(RuntimeSetting, "imap_user_verified")
+    if not verified:
+        verified = RuntimeSetting(key="imap_user_verified", is_secret=False)
+        session.add(verified)
+    verified.value_public = email_str
+    verified.updated_by = user.id
     await session.commit()
-    return MonitoredEmailOut(id=monitored.id, email=monitored.email, is_verified=True, otp_required=False, message="Email theo dõi đã được xác nhận")
-
-
-@router.get("/settings/monitored-email", response_model=list[MonitoredEmailOut])
-async def list_monitored_emails(user: User = Depends(current_user), session: AsyncSession = Depends(get_session)) -> list[MonitoredEmail]:
-    result = await session.execute(select(MonitoredEmail).where(MonitoredEmail.user_id == user.id).order_by(desc(MonitoredEmail.created_at)))
-    return list(result.scalars())
+    return ImapEmailOut(imap_user=email_str, is_verified=True, otp_required=False, message="Mailbox IMAP đã được xác nhận")
 
 
 @router.post("/settings/notification-email")
@@ -340,10 +380,12 @@ async def request_notification_email(
     await session.refresh(user)
 
     try:
+        config = await load_runtime_config(session)
         send_smtp_email(
             email_str,
             "[AI-SOC] OTP xác nhận email nhận cảnh báo",
             f"OTP xác nhận email nhận cảnh báo là: {otp}",
+            config,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"Gửi OTP email cảnh báo thất bại: {str(exc)}") from exc
@@ -403,7 +445,7 @@ async def remove_notification_email(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Remove notification email and revoke monitoring permission."""
+    """Remove notification email and revoke alert delivery permission."""
     user.notification_email = None
     user.is_notification_email_verified = False
     await session.commit()

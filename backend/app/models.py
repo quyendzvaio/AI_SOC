@@ -19,7 +19,7 @@ class OtpPurpose(str, enum.Enum):
     login = "login"
     reset_password = "reset_password"
     verify_notification_email = "verify_notification_email"
-    verify_monitored_email = "verify_monitored_email"
+    verify_imap_email = "verify_imap_email"
 
 
 class CollectorOS(str, enum.Enum):
@@ -209,18 +209,6 @@ class RuntimeSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
-class MonitoredEmail(Base):
-    __tablename__ = "monitored_emails"
-
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    email: Mapped[str] = mapped_column(String(255), index=True)
-    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
-    provider: Mapped[str] = mapped_column(String(64), default="smtp_auth")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
 class Notification(Base):
     __tablename__ = "notifications"
 
@@ -241,3 +229,29 @@ class AiQuery(Base):
     question: Mapped[str] = mapped_column(Text)
     response: Mapped[str] = mapped_column(Text)
     asked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AnalystFeedback(Base):
+    __tablename__ = "analyst_feedback"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    alert_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("alerts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    verdict: Mapped[str] = mapped_column(String(64), index=True)
+    corrected_severity: Mapped[Severity | None] = mapped_column(Enum(Severity), nullable=True)
+    corrected_mitre: Mapped[list] = mapped_column(JSONB, default=list)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class GeneratedRule(Base):
+    __tablename__ = "generated_rules"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_alert_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("alerts.id", ondelete="SET NULL"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    rule_type: Mapped[str] = mapped_column(String(64), default="sigma")
+    rule_body: Mapped[dict] = mapped_column(JSONB, default=dict)
+    backtest_summary: Mapped[dict] = mapped_column(JSONB, default=dict)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

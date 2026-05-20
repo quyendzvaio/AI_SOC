@@ -1,3 +1,8 @@
 node_modules/
 .next/
+frontend/.next/
+__pycache__/
+*.py[cod]
 .env
+frontend/test-results/
+frontend/playwright-report/
